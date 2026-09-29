@@ -1,0 +1,66 @@
+"""Standalone INA219 wiring check — run on the Pi, no GUI or motor needed.
+
+    source fred-venv/bin/activate
+    python test_ina219.py
+
+Prints bus voltage / current / power twice per second until Ctrl+C. Use it
+right after wiring the sensor, BEFORE trusting the data in main.py.
+
+If it fails, check in this order:
+  1. I2C enabled?          sudo raspi-config nonint do_i2c 0
+  2. Sensor answering?     i2cdetect -y 1     -> must show "45"
+  3. Library installed?    pip install adafruit-circuitpython-ina219
+  4. SDA on GPIO2 (physical pin 3), SCL on GPIO3 (physical pin 5),
+     VCC on 3.3 V, GND common with the Pi.
+
+Sanity checks on the readings:
+  - Bus voltage should sit near the spooler driver's supply (≈12 V if there
+    is a 5->12 V boost, ≈5 V if the driver runs straight off the Pi rail).
+  - Current ~0 mA with the motor stopped; it should jump when the spooler
+    spins (tens to a few hundred mA expected).
+  - If current reads NEGATIVE while the motor runs, Vin+ and Vin- are
+    swapped: fine for a quick test, but swap them for correct signs.
+"""
+import time
+
+import board
+import busio
+from adafruit_ina219 import INA219, ADCResolution
+
+I2C_ADDRESS = 0x44   # must match current_sensor.CurrentSensor.I2C_ADDRESS
+# discovered 0x44 works
+
+
+def test_connection() -> None:
+    try:
+        for i in range(700): 
+            bus_voltage = INA219.bus_voltage
+            current = INA219.current
+            power = INA219.power
+            
+            print(f"V: {bus_voltage} Corriente: {current} power: {power}")
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n No jala")
+
+def main() -> None:
+    i2c = busio.I2C(board.SCL, board.SDA)
+    ina = INA219(i2c, addr=I2C_ADDRESS)
+    # Same configuration current_sensor.py uses in the real program.
+    ina.bus_adc_resolution = ADCResolution.ADCRES_12BIT_32S
+    ina.shunt_adc_resolution = ADCResolution.ADCRES_12BIT_32S
+    
+    print(f"INA219 set at 0x{I2C_ADDRESS:02X}. Ctrl+C to stop.\n")
+    print(f"{'t (s)':>8}  {'bus (V)':>8}  {'current (mA)':>13}  {'power (mW)':>11}")
+    t0 = time.time()
+    while True:
+        print(f"{time.time() - t0:8.1f}  {ina.bus_voltage:8.3f}  "
+              f"{ina.current:13.2f}  {ina.power * 1000:11.1f}")
+        time.sleep(0.5)
+
+if __name__ == "__main__":
+    try:
+        # test_connection()
+        main()
+    except KeyboardInterrupt:
+        print("\nDone.")
