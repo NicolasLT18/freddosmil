@@ -1,4 +1,4 @@
-"""INA219 current sensor on the spooler motor supply line (I2C).
+"""   INA219 current sensor on the spooler motor supply line (I2C).
 
 The sensor has its OWN sampling thread so the current is captured FAST
 (``RAW_SAMPLE_RATE_HZ``, default 200 Hz) — much faster than the 10 Hz control
