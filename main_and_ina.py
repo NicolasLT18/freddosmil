@@ -33,6 +33,76 @@ Three differences, all contained in THIS file - no other module is modified:
    ticked channels. Everything is still RECORDED - the checkboxes filter the
    CSV, not the logging - so the same run can be re-exported with a different
    selection without losing data.
+
+
+ADVERTENCIAS - LO QUE PUEDE NO SERVIR
+=====================================
+Revisado contra main.py, database.py, user_interface.py, fan.py, extruder.py,
+fast_sampler.py y current_sensor.py. El archivo compila y todos los buffers /
+atributos que usa existen, pero estos puntos pueden fallar:
+
+A. Solo corre en la Raspberry Pi
+   Importa ``RPi.GPIO`` y ``PyQt5``: en una PC de escritorio no arranca. En el
+   venv del proyecto (``fred-venv``, Python 3.11 aarch64) estan matplotlib
+   3.11.0 con ``backends/backend_qt5agg.py`` y numpy/PyYAML/adafruit-*; PyQt5
+   NO esta en el venv, viene del sistema por apt gracias a
+   ``include-system-site-packages = true`` en pyvenv.cfg. Si se recrea el venv
+   sin ``--system-site-packages``, ``user_interface.py`` falla al importar
+   FigureCanvasQTAgg y ni main.py ni este archivo abren.
+
+B. Al cerrar la ventana los actuadores NO se apagan  <-- riesgo real
+   El hilo de hardware es ``daemon=True`` y ya no hay ``join()``, asi que al
+   cerrar el GUI el proceso termina de inmediato sin llamar a ``fan.stop()``,
+   ``spooler.stop()``, ``extruder.stop()`` ni ``GPIO.cleanup()`` (no existen en
+   ningun modulo; ``aboutToQuit`` solo cierra el socket de diametro). Los pines
+   quedan en su ultimo estado: el PWM del calentador puede quedar encendido.
+   main.py tampoco limpiaba, pero ahi el ``join()`` colgaba el proceso y el
+   usuario lo mataba a mano. Apagar con los botones STOP antes de cerrar.
+
+C. ``Database.time_readings`` deja de ser una lista
+   Se reemplaza por ``LoopClock``, que solo soporta ``append``, ``len()``,
+   ``bool()`` y el indice ``-1``. Cubre los dos usos actuales
+   (user_interface.py:788 usa ``len``, database.py:58 usa ``[-1]``), pero
+   cualquier codigo nuevo que recorra, rebane o pida ``[0]`` ese buffer lanza
+   IndexError/TypeError.
+
+D. ``Database.fan_duty_cycle`` se vuelve un registro de cambios
+   ``Actuators.update_fan`` solo escribe cuando el valor cambia, asi que ese
+   buffer ya no crece al ritmo del lazo. Aqui no importa (el ventilador se
+   exporta desde ``fast_fan_duty`` a 100 Hz) y ``experiment.py:221`` solo lee el
+   ultimo valor, pero el exportador viejo ``Database.generate_csv`` empareja esa
+   columna por indice y saldria desalineada. ``cooling_timestamps`` nunca se
+   llena en ningun modulo: ya estaba muerto antes de este archivo.
+
+E. La columna "Extruder RPM" no cuadra con su marca de tiempo
+   Va en el grupo MOTOR DATA, cuyo eje es ``spooler_timestamps``, pero se anota
+   solo cuando cambia el comando del stepper. Los valores no corresponden a esa
+   fila. Viene desmarcada por defecto; para una senal al ritmo real usar
+   "Stepper setpoint (RPM) @100 Hz" de la tabla rapida.
+
+F. Si un comando falla, no se reintenta
+   ``Actuators.update_fan`` / ``update_stepper`` guardan el valor en cache ANTES
+   de confirmar que la escritura al hardware funciono. Si ``update_duty_cycle``
+   o ``stepper_control_loop`` fallan, la cache ya quedo actualizada y el comando
+   no se vuelve a enviar hasta que el usuario mueva el control otra vez.
+
+G. El panel de exportacion depende de la forma exacta del GUI
+   ``install_export_panel`` busca el QScrollArea por tipo y el boton por su
+   texto literal "Download CSV File". Hoy coinciden (user_interface.py:217 y
+   :390, un solo QScrollArea). Si se renombra el boton o se agrega otro
+   QScrollArea antes, el panel se abre como ventana suelta o el boton sigue
+   usando el exportador viejo, sin INA219 y sin seleccion, en silencio.
+
+H. Detalles del exportador
+   - ``build_csv`` acepta ``starts``/``t0`` para exportar solo una ventana, pero
+     ``export_csv`` nunca los pasa: siempre exporta desde el inicio de la
+     sesion. Ese parametro esta sin usar.
+   - El hilo del INA219 escribe ``ina_timestamps``, ``spooler_current`` y
+     ``spooler_bus_voltage`` en tres ``append`` sin candado. Exportar justo en
+     medio puede dejar la ultima fila con celdas vacias. Irrelevante salvo para
+     esa fila.
+   - Las filas se cortan al largo del buffer de tiempos; si un buffer de datos
+     quedara mas largo, esos valores no se escriben.
 """
 import csv
 import threading
